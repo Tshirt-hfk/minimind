@@ -1,5 +1,4 @@
 import os
-import time
 import random
 import torch
 import warnings
@@ -8,33 +7,25 @@ import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from model.model import Transformer
 from model.LMConfig import LMConfig
+from accelerate import load_checkpoint_and_dispatch
 
 warnings.filterwarnings('ignore')
 
 
-def init_model(lm_config):
-    tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer',
-                                              trust_remote_code=True, use_fast=False)
-    model_from = 1  # 1从权重，2用transformers
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+
+def init_model(lm_config, model_path=None, model_from=1):
+    tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
     if model_from == 1:
-        moe_path = '_moe' if lm_config.use_moe else ''
-        ckp = f'./out/single_chat/full_sft_{lm_config.dim}{moe_path}.pth'
-
         model = Transformer(lm_config)
-        state_dict = torch.load(ckp, map_location=device)
-
-        # 处理不需要的前缀
-        unwanted_prefix = '_orig_mod.'
-        for k, v in list(state_dict.items()):
-            if k.startswith(unwanted_prefix):
-                state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-        # 加载到模型中
-        model.load_state_dict(state_dict, strict=False)
+        model = load_checkpoint_and_dispatch(model, model_path)
     else:
         model = AutoModelForCausalLM.from_pretrained('minimind', trust_remote_code=True)
     model = model.to(device)
 
+    print(f'模型参数: {count_parameters(model) / 1e6} 百万 = {count_parameters(model) / 1e9} B (Billion)')
     return model, tokenizer
 
 
@@ -45,9 +36,10 @@ if __name__ == "__main__":
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     dtype = 'bfloat16'
     lm_config = LMConfig()
+    out_dir = './out/full_sft/'
     # -----------------------------------------------------------------------------
 
-    model, tokenizer = init_model(lm_config)
+    model, tokenizer = init_model(lm_config, out_dir)
     model = model.eval()
 
     # 消息模板，具体实现根据你的tokenizer进行调整
@@ -72,7 +64,7 @@ if __name__ == "__main__":
             test_df = pd.read_csv(file_path)
 
             # 存储结果的DataFrame
-            results_df = pd.DataFrame(columns=['question', 'A', 'B', 'C', 'D', 'answer', 'llm_answer', 'is_right'])
+            result = []
             total_correct_in_file = 0  # 用于记录当前文件的正确数
 
             for row in test_df.itertuples(index=True, name='Pandas'):
@@ -127,7 +119,7 @@ if __name__ == "__main__":
 
                 # 比较答案并记录
                 is_right = 1 if max_option_answer == right_answer else 0
-                results_df = results_df.append({
+                result.append({
                     'question': question,
                     'A': A,
                     'B': B,
@@ -136,7 +128,7 @@ if __name__ == "__main__":
                     'answer': right_answer,
                     'llm_answer': max_option_answer,
                     'is_right': is_right
-                }, ignore_index=True)
+                })
                 # print(f'id: {id} 问题: {question[:10]}... 是否正确: {is_right}')
 
                 if is_right:
@@ -147,7 +139,7 @@ if __name__ == "__main__":
 
             # 计算当前文件的正确率并添加到结果DataFrame的最后一行
             accuracy = total_correct_in_file / len(test_df)
-            results_df = results_df.append({
+            result.append({
                 'question': '-',
                 'A': '-',
                 'B': '-',
@@ -156,12 +148,13 @@ if __name__ == "__main__":
                 'answer': f'文件 {filename} 的正确率: {accuracy:.2%}',
                 'llm_answer': '-',
                 'is_right': '-'
-            }, ignore_index=True)
+            })
 
             print(f'{filename.split(".")[0]} ，{total_correct_in_file}/{len(test_df)}，正确率: {accuracy:.2%}')
 
             # 保存结果到CSV
             results_path = os.path.join(results_dir, f"{filename.split('.')[0]}_result.csv")
+            results_df = pd.DataFrame(result)
             results_df.to_csv(results_path, index=False)
 
     # 计算总正确率
