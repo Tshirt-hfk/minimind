@@ -34,7 +34,7 @@ def precompute_pos_cis(dim: int, end: int, theta: float = 10000.0, train_len: in
     return pos_cis
 
 
-def apply_rotary_emb(xq, xk, pos_cis):
+def apply_rotary_emb(x, pos_cis):
     def unite_shape(pos_cis, x):
         ndim = x.ndim
         assert 0 <= 1 < ndim
@@ -42,12 +42,10 @@ def apply_rotary_emb(xq, xk, pos_cis):
         shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
         return pos_cis.view(*shape)
 
-    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    pos_cis = unite_shape(pos_cis, xq_)
-    xq_out = torch.view_as_real(xq_ * pos_cis).flatten(3)
-    xk_out = torch.view_as_real(xk_ * pos_cis).flatten(3)
-    return xq_out.type_as(xq), xk_out.type_as(xk)
+    x_ = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
+    pos_cis = unite_shape(pos_cis, x_)
+    x_out = torch.view_as_real(x_ * pos_cis).flatten(3)
+    return x_out.type_as(x)
 
 
 def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -62,19 +60,14 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
     )
 
 
-class Attention(nn.Module):
+class SharedKVAttention(nn.Module):
     def __init__(self, args: LMConfig):
         super().__init__()
-        self.n_kv_heads = args.n_heads if args.n_kv_heads is None else args.n_kv_heads
         self.n_heads = args.n_heads
-        assert self.n_heads % self.n_kv_heads == 0
-        self.n_rep = self.n_heads // self.n_kv_heads
+        self.n_rep = args.n_heads // args.n_kv_heads
         self.head_dim = args.dim // args.n_heads
         self.wq = nn.Linear(args.dim, args.n_heads * self.head_dim, bias=False)
-        self.wk = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
-        self.wv = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
         self.wo = nn.Linear(args.n_heads * self.head_dim, args.dim, bias=False)
-        self.k_cache, self.v_cache = None, None
         self.attn_dropout = nn.Dropout(args.dropout)
         self.resid_dropout = nn.Dropout(args.dropout)
         self.dropout = args.dropout
@@ -85,30 +78,12 @@ class Attention(nn.Module):
         mask = torch.triu(mask, diagonal=1)
         self.register_buffer("mask", mask, persistent=False)
 
-    def forward(self, x: torch.Tensor, pos_cis: torch.Tensor, kv_cache=False):
+    def forward(self, x: torch.Tensor, xk: torch.Tensor, xv: torch.Tensor, pos_cis: torch.Tensor):
         bsz, seqlen, _ = x.shape
 
-        xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
-
-        xq = xq.view(bsz, seqlen, self.n_heads, self.head_dim)
-        xk = xk.view(bsz, seqlen, self.n_kv_heads, self.head_dim)
-        xv = xv.view(bsz, seqlen, self.n_kv_heads, self.head_dim)
-
-        xq, xk = apply_rotary_emb(xq, xk, pos_cis)
-
-        # 更高效的kv_cache实现
-        if kv_cache and self.eval():
-            if seqlen == 1 and all(cache is not None for cache in (self.k_cache, self.v_cache)):
-                xk = torch.cat((self.k_cache, xk), dim=1)
-                xv = torch.cat((self.v_cache, xv), dim=1)
-            self.k_cache, self.v_cache = xk, xv
-
-        xk = repeat_kv(xk, self.n_rep)  # (bs, seqlen, n_heads, head_dim)
-        xv = repeat_kv(xv, self.n_rep)  # (bs, seqlen, n_heads, head_dim)
-
+        xq = self.wq(x).view(bsz, seqlen, self.n_heads, self.head_dim)
+        xq = apply_rotary_emb(xq, pos_cis)
         xq = xq.transpose(1, 2)
-        xk = xk.transpose(1, 2)
-        xv = xv.transpose(1, 2)
 
         if self.flash and seqlen != 1:
             output = torch.nn.functional.scaled_dot_product_attention(xq, xk, xv, attn_mask=None,
@@ -271,18 +246,15 @@ class MOEFeedForward(nn.Module):
         return expert_cache
 
 
-class TransformerBlock(nn.Module):
-    def __init__(self, layer_id: int, args: LMConfig):
+class SharedKVTransformerLayer(nn.Module):
+    def __init__(self, args: LMConfig):
         super().__init__()
-        self.n_heads = args.n_heads
         self.dim = args.dim
-        self.head_dim = args.dim // args.n_heads
-        self.attention = Attention(args)
 
-        self.layer_id = layer_id
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
-        self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
+        self.attention = SharedKVAttention(args)
 
+        self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
         if args.use_moe:
             self.feed_forward = MOEFeedForward(args)
         else:
@@ -292,10 +264,55 @@ class TransformerBlock(nn.Module):
                 dropout=args.dropout,
             )
 
-    def forward(self, x, pos_cis, kv_cache=False):
-        h = x + self.attention(self.attention_norm(x), pos_cis, kv_cache)
+    def forward(self, x, xk, xv, pos_cis):
+        h = x + self.attention(self.attention_norm(x), xk, xv, pos_cis)
         out = h + self.feed_forward(self.ffn_norm(h))
         return out
+
+
+class TransformerBlock(nn.Module):
+    def __init__(self, block_id: int, args: LMConfig):
+        super().__init__()
+        self.block_id = block_id
+        self.n_kv_heads = args.n_kv_heads
+        assert args.n_heads % self.n_kv_heads == 0
+        self.n_rep = args.n_heads // self.n_kv_heads
+        self.head_dim = args.dim // args.n_heads
+
+        self.kv_norm = RMSNorm(args.dim, eps=args.norm_eps)
+        self.wk = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
+        self.wv = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
+        self.k_cache, self.v_cache = None, None
+
+        self.shared_kv_layers = nn.ModuleList([
+            SharedKVTransformerLayer(args) for _ in range(args.n_shared_layers)
+        ])
+
+    def forward(self, x, pos_cis, kv_cache=False):
+        bsz, seqlen, _ = x.shape
+
+        x_norm = self.kv_norm(x)
+        xk, xv = self.wk(x_norm), self.wv(x_norm)
+        xk = xk.view(bsz, seqlen, self.n_kv_heads, self.head_dim)
+        xv = xv.view(bsz, seqlen, self.n_kv_heads, self.head_dim)
+        xk = apply_rotary_emb(xk, pos_cis)
+
+        # 更高效的kv_cache实现
+        if kv_cache and self.eval():
+            if seqlen == 1 and all(cache is not None for cache in (self.k_cache, self.v_cache)):
+                xk = torch.cat((self.k_cache, xk), dim=1)
+                xv = torch.cat((self.v_cache, xv), dim=1)
+            self.k_cache, self.v_cache = xk, xv
+
+        xk = repeat_kv(xk, self.n_rep)  # (bs, seqlen, n_heads, head_dim)
+        xv = repeat_kv(xv, self.n_rep)  # (bs, seqlen, n_heads, head_dim)
+
+        xk = xk.transpose(1, 2)
+        xv = xv.transpose(1, 2)
+
+        for layer in self.shared_kv_layers:
+            x = layer(x, xk, xv, pos_cis)
+        return x
 
 
 class Transformer(PreTrainedModel):
@@ -313,8 +330,8 @@ class Transformer(PreTrainedModel):
         self.tok_embeddings = nn.Embedding(params.vocab_size, params.dim)
         self.dropout = nn.Dropout(params.dropout)
         self.layers = torch.nn.ModuleList()
-        for layer_id in range(self.n_layers):
-            self.layers.append(TransformerBlock(layer_id, params))
+        for block_id in range(self.n_layers//params.n_shared_layers):
+            self.layers.append(TransformerBlock(block_id, params))
         self.norm = RMSNorm(params.dim, eps=params.norm_eps)
         self.output = nn.Linear(params.dim, params.vocab_size, bias=False)
         if params.tie_embeddings:

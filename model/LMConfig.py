@@ -9,6 +9,7 @@ class LMConfig(PretrainedConfig):
             self,
             dim: int = 2048,
             n_layers: int = 24,
+            n_shared_layers: int = 4,
             n_heads: int = 32,
             n_kv_heads: int = 8,
             vocab_size: int = 64000,
@@ -34,6 +35,7 @@ class LMConfig(PretrainedConfig):
     ):
         self.dim = dim
         self.n_layers = n_layers
+        self.n_shared_layers = n_shared_layers
         self.n_heads = n_heads
         self.n_kv_heads = n_kv_heads
         self.vocab_size = vocab_size

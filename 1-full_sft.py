@@ -118,15 +118,15 @@ if __name__ == "__main__":
     parser.add_argument("--wandb_project", type=str, default="MiniMind-Full-SFT", help="Weights & Biases project name")
     parser.add_argument("--num_workers", type=int, default=8, help="Number of workers for data loading")
     parser.add_argument("--data_dir", type=str, default="./dataset/sft_data/", help="Path to training data")
-    parser.add_argument("--load_dir", type=str, default="./out/pretrain/", help="Path to loading model")
-    parser.add_argument("--save_dir", type=str, default="./out/full_sft/", help="Path to saving model")
+    parser.add_argument("--load_dir", type=str, default="./out/sharedkv/pretrain/", help="Path to loading model")
+    parser.add_argument("--save_dir", type=str, default="./out/sharedkv/full_sft/", help="Path to saving model")
     parser.add_argument("--warmup_steps", type=int, default=0, help="Number of warmup iterations")
     parser.add_argument("--log_interval", type=int, default=100, help="Logging interval")
     parser.add_argument("--save_interval", type=int, default=1000, help="Model saving interval")
 
     args = parser.parse_args()
     lm_config = LMConfig()
-    args.wandb_run_name = f"Transformer-Length_{lm_config.max_seq_len}-Layer_{lm_config.n_layers}-Dim_{lm_config.dim}"
+    args.wandb_run_name = f"Transformer-SharedKV-Length_{lm_config.max_seq_len}-Layer_{lm_config.n_layers}-Dim_{lm_config.dim}"
     torch.manual_seed(1337)
     set_seed(1337)
 
