@@ -13,7 +13,7 @@ class LMConfig(PretrainedConfig):
             n_kv_heads: int = 8,
             vocab_size: int = 64000,
             hidden_dim: int = 4096,
-            norm_eps: float = 1e-6,
+            norm_eps: float = 1e-5,
             max_seq_len: int = 1024,
             dropout: float = 0.0,
             flash_attn: bool = True,

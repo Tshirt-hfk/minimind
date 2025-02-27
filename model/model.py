@@ -132,12 +132,12 @@ class FeedForward(nn.Module):
     def __init__(self, dim: int, hidden_dim: int, dropout: float):
         super().__init__()
         self.w1 = nn.Linear(dim, hidden_dim, bias=False)
-        self.w2 = nn.Linear(hidden_dim, dim, bias=False)
-        self.wo = nn.Linear(dim, hidden_dim, bias=False)
+        self.w2 = nn.Linear(dim, hidden_dim, bias=False)
+        self.wo = nn.Linear(hidden_dim, dim, bias=False)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        return self.dropout(self.w2(F.silu(self.w1(x)) * self.wo(x)))
+        return self.dropout(self.wo(F.silu(self.w1(x)) * self.w2(x)))
 
 
 class MoEGate(nn.Module):
