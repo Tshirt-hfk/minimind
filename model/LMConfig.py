@@ -7,9 +7,9 @@ class LMConfig(PretrainedConfig):
 
     def __init__(
             self,
-            dim: int = 1024,
+            dim: int = 1536,
             n_layers: int = 24,
-            n_heads: int = 16,
+            n_heads: int = 24,
             n_kv_heads: int = 8,
             vocab_size: int = 64000,
             hidden_dim: int = 3072,
@@ -23,8 +23,8 @@ class LMConfig(PretrainedConfig):
             ####################################################
             use_memory: bool = True,
             memory_size: int = 4096,
-            memory_dim: int = 512,
-            memory_head_num: int = 6,
+            memory_dim: int = 768,
+            memory_head_num: int = 4,
             ####################################################
             # Here are the specific configurations of MOE
             # When use_moe is false, the following is invalid
