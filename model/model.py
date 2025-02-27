@@ -128,6 +128,29 @@ class Attention(nn.Module):
         return output
 
 
+class NaiveMemoryFeedForward(nn.Module):
+    def __init__(self, args: LMConfig):
+        super().__init__()
+        self.dim = args.dim
+        self.memory_dim = args.memory_dim
+        self.memory_size = args.memory_size
+        self.memory_head_num = args.memory_head_num
+        self.memory = nn.Parameter(torch.empty(self.memory_size, self.memory_dim))
+        self.wq = nn.Linear(self.dim, self.memory_head_num * self.memory_dim, bias=False) # TODO: 可以使用lora形式
+        self.wg = nn.Linear(self.dim, self.memory_head_num * self.memory_dim, bias=False)
+        self.wo = nn.Linear(self.memory_head_num * self.memory_dim, self.dim, bias=False)
+
+
+    def forward(self, x: torch.Tensor):
+        bsz, seqlen, _ = x.shape
+        xq = self.wq(x).view(bsz, seqlen, self.memory_head_num, self.memory_dim)
+        xg = F.silu(self.wg(x))
+        score = F.softmax(torch.einsum('blhd,md->blhm', xq, self.memory) / math.sqrt(self.memory_dim), dim=-1)
+        output = (score @ self.memory + xq).view(bsz, seqlen, -1)
+        output = self.wo(output * xg)
+        return output
+
+
 class FeedForward(nn.Module):
     def __init__(self, dim: int, hidden_dim: int, dropout: float):
         super().__init__()
@@ -283,7 +306,9 @@ class TransformerBlock(nn.Module):
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
         self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
 
-        if args.use_moe:
+        if args.use_memory:
+            self.feed_forward = NaiveMemoryFeedForward(args)
+        elif args.use_moe:
             self.feed_forward = MOEFeedForward(args)
         else:
             self.feed_forward = FeedForward(
@@ -327,6 +352,8 @@ class Transformer(PreTrainedModel):
         for pn, p in self.named_parameters():
             if pn.endswith('wo.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * params.n_layers))
+            elif pn.endswith('memory'):
+                torch.nn.init.normal_(p, mean=0.0, std=0.02)
 
         self.last_loss = None
         self.OUT = CausalLMOutputWithPast()

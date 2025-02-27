@@ -7,17 +7,24 @@ class LMConfig(PretrainedConfig):
 
     def __init__(
             self,
-            dim: int = 2048,
+            dim: int = 1024,
             n_layers: int = 24,
-            n_heads: int = 32,
+            n_heads: int = 16,
             n_kv_heads: int = 8,
             vocab_size: int = 64000,
-            hidden_dim: int = 4096,
+            hidden_dim: int = 3072,
             norm_eps: float = 1e-5,
             max_seq_len: int = 1024,
             dropout: float = 0.0,
             flash_attn: bool = True,
             tie_embeddings: bool = True,
+            ####################################################
+            # Here are the specific configurations of Memory
+            ####################################################
+            use_memory: bool = True,
+            memory_size: int = 4096,
+            memory_dim: int = 512,
+            memory_head_num: int = 6,
             ####################################################
             # Here are the specific configurations of MOE
             # When use_moe is false, the following is invalid
@@ -43,6 +50,13 @@ class LMConfig(PretrainedConfig):
         self.dropout = dropout
         self.flash_attn = flash_attn
         self.tie_embeddings = tie_embeddings
+        ####################################################
+        # Here are the specific configurations of Memory
+        ####################################################
+        self.use_memory = use_memory
+        self.memory_size = memory_size
+        self.memory_dim = memory_dim
+        self.memory_head_num = memory_head_num
         ####################################################
         # Here are the specific configurations of MOE
         # When use_moe is false, the following is invalid

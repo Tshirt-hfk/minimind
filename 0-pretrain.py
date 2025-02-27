@@ -119,7 +119,7 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu", help="Device to use")
     parser.add_argument("--dtype", type=str, default="bfloat16", help="Data type")
     parser.add_argument("--use_wandb", action="store_true", help="Use Weights & Biases")
-    parser.add_argument("--wandb_project", type=str, default="MiniMind-Pretrain", help="Weights & Biases project name")
+    parser.add_argument("--wandb_project", type=str, default="MiniMind-Pretrain-Memory-Exp", help="Weights & Biases project name")
     parser.add_argument("--num_workers", type=int, default=8, help="Number of workers for data loading")
     parser.add_argument("--data_dir", type=str, default="./dataset/pretrain_data/", help="Path to training data")
     parser.add_argument("--load_dir", type=str, default=None, help="Path to loading model")
@@ -130,7 +130,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     lm_config = LMConfig()
-    args.wandb_run_name = f"Transformer-Length_{lm_config.max_seq_len}-Layer_{lm_config.n_layers}-Dim_{lm_config.dim}"
+    args.wandb_run_name = f"Transformer-NaiveMemory-Length_{lm_config.max_seq_len}-Layer_{lm_config.n_layers}-Dim_{lm_config.dim}"
     torch.manual_seed(1337)
     set_seed(1337)
 
